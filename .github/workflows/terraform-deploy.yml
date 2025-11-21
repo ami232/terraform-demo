@@ -56,4 +56,4 @@ jobs:
           # Package app (ensure files are at archive root)
           zip -r app.zip app.py requirements.txt
           # Deploy using GitHub variables exposed as job env
-          az webapp deploy --resource-group "$RESOURCE_GROUP_NAME" --name "$WEB_APP_NAME" --src-path app.zip --type zip
+          az webapp deploy --resource-group "$RESOURCE_GROUP_NAME" --name "$WEB_APP_NAME" --src-path app.zip --type zip --timeout 600000
