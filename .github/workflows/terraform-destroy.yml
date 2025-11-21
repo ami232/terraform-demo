@@ -1,0 +1,45 @@
+name: Terraform (destroy - manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  terraform-destroy:
+    runs-on: ubuntu-latest
+    # Use protected environment to require manual approval before destroying infra
+    environment: production
+    env:
+      # Repository variables (set via GitHub Settings -> Variables)
+      RESOURCE_GROUP_NAME: ${{ vars.RESOURCE_GROUP_NAME }}
+      WEB_APP_NAME: ${{ vars.WEB_APP_NAME }}
+      APP_SERVICE_PLAN_NAME: ${{ vars.APP_SERVICE_PLAN_NAME }}
+      # Terraform variable envs so terraform picks them up automatically
+      TF_VAR_resource_group_name: ${{ vars.RESOURCE_GROUP_NAME }}
+      TF_VAR_web_app_name: ${{ vars.WEB_APP_NAME }}
+      TF_VAR_app_service_plan_name: ${{ vars.APP_SERVICE_PLAN_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.6.0'
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan (destroy)
+        run: terraform plan -destroy -out=tfplan -input=false
+
+      - name: Show Destroy Plan Summary
+        run: terraform show -no-color tfplan | sed -n '1,200p'
+
+      - name: Terraform Apply (destroy)
+        # This will run only after manual approval via the `production` environment
+        run: terraform apply -input=false tfplan

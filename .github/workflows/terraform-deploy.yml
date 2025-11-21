@@ -1,0 +1,59 @@
+name: Terraform (deploy)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  terraform-apply:
+    runs-on: ubuntu-latest
+    # Use a protected environment to require manual approvals for applies
+    environment: production
+    env:
+      # Repository variables (set via GitHub -> Settings -> Variables)
+      RESOURCE_GROUP_NAME: ${{ vars.RESOURCE_GROUP_NAME }}
+      WEB_APP_NAME: ${{ vars.WEB_APP_NAME }}
+      APP_SERVICE_PLAN_NAME: ${{ vars.APP_SERVICE_PLAN_NAME }}
+      # Also expose Terraform variable envs so terraform picks them up
+      TF_VAR_resource_group_name: ${{ vars.RESOURCE_GROUP_NAME }}
+      TF_VAR_web_app_name: ${{ vars.WEB_APP_NAME }}
+      TF_VAR_app_service_plan_name: ${{ vars.APP_SERVICE_PLAN_NAME }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.6.0'
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Format & Validate
+        run: |
+          terraform fmt -check || true
+          terraform validate || true
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan -input=false
+
+      - name: Show Plan Summary
+        run: terraform show -no-color tfplan | sed -n '1,200p'
+
+      - name: Terraform Apply
+        run: terraform apply -input=false tfplan
+
+      - name: Package and deploy app
+        if: ${{ success() }}
+        run: |
+          # Package app (ensure files are at archive root)
+          zip -r app.zip app.py requirements.txt
+          # Deploy using GitHub variables exposed as job env
+          az webapp deploy --resource-group "$RESOURCE_GROUP_NAME" --name "$WEB_APP_NAME" --src-path app.zip --type zip

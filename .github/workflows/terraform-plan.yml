@@ -1,0 +1,38 @@
+name: Terraform (plan only)
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: '1.6.0'
+
+          
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Format & Validate
+        run: |
+          terraform fmt -check || true
+          terraform validate || true
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan -input=false
+
+      - name: Show Plan Summary
+        run: terraform show -no-color tfplan | sed -n '1,200p'

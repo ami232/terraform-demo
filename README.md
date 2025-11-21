@@ -1,11 +1,12 @@
-# Terraform Azure Deployment Guide
+# Minimal Terraform -> Azure App Service demo
 
-Deploy to Azure with Terraform using manual deployment.
+This folder contains a tiny example for students: a one-file Flask app (`app.py`) and a minimal Terraform configuration that creates an App Service plan and a Linux Web App inside an existing Resource Group.
 
-## Prerequisites
+Goal: show infrastructure as code using Terraform and how to deploy app code with the Azure CLI `az webapp deploy` command. The Terraform configuration assumes the Resource Group already exists (e.g., created by an earlier workflow or by an instructor).
 
-- Azure subscription with Contributor role
-- Azure CLI and Terraform installed
+Quick steps (local)
+
+1. Install prerequisites: `terraform` and `az` (Azure CLI).
 
 ```bash
 # Windows (PowerShell)
@@ -20,164 +21,82 @@ brew install hashicorp/tap/terraform azure-cli
 curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
 ```
 
-## Deployment Steps
-
-### 1. Login to Azure
+2. Login to Azure:
 
 ```bash
 az login
+az account set --subscription "YOUR_SUBSCRIPTION_ID_OR_NAME"
 ```
 
-If you have multiple subscriptions:
+3. Copy example variables and edit (required):
 
 ```bash
-az account list --output table
-az account set --subscription "YOUR_SUBSCRIPTION_NAME"
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars and set `resource_group_name` to the existing Resource Group name
+# and change `web_app_name` to something globally unique before running `terraform apply`.
 ```
 
-### 2. Initialize Terraform
+4. Initialize and preview:
 
 ```bash
 terraform init
-```
-
-### 3. Validate Configuration
-
-```bash
-terraform validate
-terraform fmt
-```
-
-### 4. Preview Changes
-
-```bash
 terraform plan
 ```
 
-Review the planned changes carefully.
-
-### 5. Deploy
+5. Apply to create infra (this creates resources in your subscription):
 
 ```bash
 terraform apply
 ```
 
-Type `yes` when prompted to confirm.
-
-### 6. Get the URL
+6. Package and deploy the Flask app (after `apply` completes):
 
 ```bash
-terraform output web_app_url
+# macOS / Linux (bash)
+export RESOURCE_GROUP=$(terraform output -raw resource_group_name)
+export APP_NAME=$(terraform output -raw web_app_name)
+zip -r app.zip app.py requirements.txt
+az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --src-path app.zip --type zip
+az webapp log tail --resource-group "$RESOURCE_GROUP" --name "$APP_NAME"
 ```
 
-Visit the URL to see your deployed application.
-
-## Deploying Flask App Updates
-
-After Terraform creates the infrastructure, deploy your Flask app code:
-
-### Get the app name
-
-```bash
-terraform output web_app_name
-# Or check main.tf for the app name
-```
-
-### (Optional) Export names as environment variables
-
-For macOS/Linux (zsh/bash):
-```bash
-export RESOURCE_GROUP="$(terraform output -raw resource_group_name)"
-export APP_NAME="$(terraform output -raw web_app_name)"
-```
-
-For Windows PowerShell:
 ```powershell
+# Windows (PowerShell)
 $env:RESOURCE_GROUP = (terraform output -raw resource_group_name)
 $env:APP_NAME = (terraform output -raw web_app_name)
+Compress-Archive -Path app.py, requirements.txt -DestinationPath app.zip -Force
+az webapp deploy --resource-group $env:RESOURCE_GROUP --name $env:APP_NAME --src-path app.zip --type zip
+az webapp log tail --resource-group $env:RESOURCE_GROUP --name $env:APP_NAME
 ```
 
-You can then reuse these in deployment commands without hardcoding.
+7. Using GitHub Actions
 
-### Deploy with zip
+This repository includes three GitHub Actions workflows in `.github/workflows`:
 
-```bash
-# Create zip file with application code only
-zip -r app.zip app.py requirements.txt
+- `terraform-plan.yml`: runs on pull requests targeting `main` and performs `terraform init` + `terraform plan` and prints a short plan summary for reviewers.
+- `terraform-deploy.yml`: runs on pushes to `main` (and can be triggered manually). It performs `terraform plan` and `terraform apply`, then packages and deploys the Flask app using `az webapp deploy`. This job is protected by the `production` environment so an approval is required before the apply step.
+- `terraform-destroy.yml`: a manual `workflow_dispatch` workflow that runs `terraform plan -destroy` and applies after an environment approval. Use this only when you intend to destroy resources.
 
-# If not already exported:
-export RESOURCE_GROUP="$(terraform output -raw resource_group_name)"
-export APP_NAME="$(terraform output -raw web_app_name)"
+Required repository setup for CI
 
-# Deploy to Azure (uses Terraform-defined startup command)
-az webapp deploy \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME" \
-  --src-path app.zip \
-  --type zip
+- GitHub repository **secret** (add via Settings → Secrets): `AZURE_CREDENTIALS` — a single JSON credential used by the `azure/login` action. This is the recommended, supported input for `azure/login@v1` in CI.
+- GitHub repository **variables** (Settings → Variables) used by the workflows: `RESOURCE_GROUP_NAME`, `WEB_APP_NAME`, `APP_SERVICE_PLAN_NAME`. The workflows expose these as `TF_VAR_*` so Terraform picks them up automatically.
+- Create an environment named `production` in the repo (Settings → Environments) and require reviewers/approval to protect `apply` and `destroy` runs.
 
-# Watch deployment logs
-az webapp log tail \
-  --name "$APP_NAME" \
-  --resource-group "$RESOURCE_GROUP"
-```
+Setting Azure credentials and repository variables (recommended)
 
-If variables are not set, replace `$RESOURCE_GROUP` and `$APP_NAME` manually.
+If a service principal already exists, **do NOT commit credentials to source**. Instead create or supply a single JSON credential in the `--sdk-auth` format and store it as the repository secret `AZURE_CREDENTIALS`. The `azure/login@v1` action reads this JSON via its `creds` input and authenticates cleanly in CI.
 
-**Note:** Startup is handled by the `app_command_line` value in `main.tf` (`gunicorn --bind=0.0.0.0:8000 --timeout=600 app:app`). No separate startup script is needed.
+{
+  "clientId": "<APP_ID>",
+  "clientSecret": "<PASSWORD>",
+  "subscriptionId": "<SUBSCRIPTION_ID>",
+  "tenantId": "<TENANT_ID>",
+  "activeDirectoryEndpointUrl": "https://login.microsoftonline.com",
+  "resourceManagerEndpointUrl": "https://management.azure.com/",
+  "sqlManagementEndpointUrl": "https://management.core.windows.net:8443/",
+  "galleryEndpointUrl": "https://gallery.azure.com/",
+  "managementEndpointUrl": "https://management.core.windows.net/"
+}
 
-### Redeploy after code changes
-
-```bash
-zip -r app.zip app.py requirements.txt
-az webapp deploy \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME" \
-  --src-path app.zip \
-  --type zip
-```
-
-## Common Commands
-
-```bash
-terraform fmt          # Format code
-terraform validate     # Check syntax
-terraform plan         # Preview changes
-terraform apply        # Deploy changes
-terraform destroy      # Remove all resources
-terraform output       # Show output values
-terraform show         # Show current state
-```
-
-## Making Updates
-
-When you change your configuration:
-
-```bash
-terraform plan         # See what will change
-terraform apply        # Apply the changes
-```
-
-Terraform will only modify what changed.
-
-## Troubleshooting
-
-**Auth errors**: Run `az login` again or check you're using the right subscription
-
-**Name conflicts**: Web app names must be globally unique - change the name in `main.tf`
-
-**Permissions**: Need Contributor role on the resource group
-
-**Deploy fails**: Check logs with `az webapp log tail --name $APP_NAME`
-
-**State locked**: Another terraform operation is running - wait or remove lock with `terraform force-unlock`
-
-## Cleanup
-
-Remove all deployed resources:
-
-```bash
-terraform destroy
-```
-
-Type `yes` to confirm. This will delete everything created by Terraform.
+After adding the secrets and variables the PR workflow will produce plan output for review, and merges or manual triggers to `main` will run the protected deploy/destroy workflows. When a deploy/destroy job runs it will pause and require approval in the `production` environment before the apply/destroy step executes.
